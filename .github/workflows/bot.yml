@@ -39,7 +39,17 @@ jobs:
 
       - name: Test alert
         if: inputs.mode == 'test'
-        run: python -c "import live; live.notify('Paper trader (cloud) test', 'Cloud bot is set up. Your Mac can be off now.')"
+        run: |
+          python - <<'PY'
+          import live
+          if live.trading:  # read-only check: no order is placed
+              a = live.trading.get_account()
+              msg = f"Alpaca paper connected: status {a.status}, equity ${float(a.equity):,.2f}. Approve buttons are live."
+          else:
+              msg = "Cloud bot is set up (alert-only: no Alpaca keys found)."
+          print(msg)
+          live.notify("Paper trader (cloud) test", msg)
+          PY
 
       - name: Morning scan
         if: github.event.schedule == '0 13 * * 1-5' || inputs.mode == 'morning'
