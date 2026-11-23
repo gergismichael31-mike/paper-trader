@@ -3,8 +3,10 @@ name: paper-trader
 on:
   schedule:
     # UTC times, started early because GitHub can delay scheduled runs; the script waits for the NY time itself.
-    - cron: "0 13 * * 1-5"   # morning run: setups entered 09:30-12:29 NY
-    - cron: "0 16 * * 1-5"   # afternoon run: setups entered 12:30-15:44 NY, then the scorecard
+    # GitHub sometimes drops scheduled runs, so each run gets 6 chances; extra starts find the work
+    # done (same concurrency lane, scorecard already saved) and exit without doing anything.
+    - cron: "5,25,45 12,13 * * 1-5"   # morning run: setups entered 09:30-12:29 NY
+    - cron: "5,25,45 15,16 * * 1-5"   # afternoon run: setups entered 12:30-15:44 NY, then the scorecard
   workflow_dispatch:
     inputs:
       mode:
@@ -18,7 +20,7 @@ permissions:
 
 concurrency:
   # a late scheduled run and a manual backup of the same run share a lane: the second waits, then finds nothing to do
-  group: ${{ (github.event.schedule == '0 13 * * 1-5' || inputs.mode == 'morning') && 'morning' || (github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon') && 'afternoon' || 'test' }}
+  group: ${{ (github.event.schedule == '5,25,45 12,13 * * 1-5' || inputs.mode == 'morning') && 'morning' || (github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon') && 'afternoon' || 'test' }}
 
 jobs:
   run:
@@ -53,26 +55,26 @@ jobs:
           PY
 
       - name: Morning scan
-        if: github.event.schedule == '0 13 * * 1-5' || inputs.mode == 'morning'
+        if: github.event.schedule == '5,25,45 12,13 * * 1-5' || inputs.mode == 'morning'
         run: python live.py scan 09:30 12:29
 
       - name: Afternoon scan
-        if: github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon'
+        if: github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon'
         run: python live.py scan 12:30 15:44
 
       - name: Already scored today?
         id: done
-        if: github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon'
+        if: github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon'
         run: |
           git fetch -q origin main
           if [ "$(git show origin/main:last_run.txt 2>/dev/null)" = "$(date -u +%F)" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; fi
 
       - name: Scorecard
-        if: (github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon') && steps.done.outputs.skip != '1'
+        if: (github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon') && steps.done.outputs.skip != '1'
         run: python live.py score
 
       - name: Save results
-        if: (github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon') && steps.done.outputs.skip != '1'
+        if: (github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon') && steps.done.outputs.skip != '1'
         run: |
           date -u +%F > last_run.txt   # a daily commit also keeps GitHub from pausing the schedule
           git config user.name "paper-trader-bot"
