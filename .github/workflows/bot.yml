@@ -43,8 +43,9 @@ jobs:
           python - <<'PY'
           import live
           if live.trading:  # read-only check: no order is placed
+              live.paper_only()  # raises (and alerts) if this is not an Alpaca PAPER account
               a = live.trading.get_account()
-              msg = f"Alpaca paper connected: status {a.status}, equity ${float(a.equity):,.2f}. Approve buttons are live."
+              msg = f"PAPER account {a.account_number} verified, equity ${float(a.equity):,.2f}. Approve buttons are live."
           else:
               msg = "Cloud bot is set up (alert-only: no Alpaca keys found)."
           print(msg)

@@ -27,6 +27,19 @@ if data.KEY and data.SECRET:
     from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
     trading = TradingClient(data.KEY, data.SECRET, paper=True)  # PAPER ONLY - never change this
 pending = {}  # one-time token -> (sym, sig, qty, deadline)
+_paper_checked = False
+
+
+def paper_only():
+    """Second lock besides paper=True: refuse to touch any account that isn't an Alpaca PAPER account."""
+    global _paper_checked
+    if not _paper_checked:
+        url = str(getattr(trading._base_url, "value", trading._base_url))
+        acct = trading.get_account().account_number
+        if "paper-api.alpaca.markets" not in url or not str(acct).startswith("PA"):
+            notify("Trading BLOCKED", f"Not a paper account ({acct} @ {url}). No orders will be placed.")
+            raise RuntimeError(f"refusing non-paper account {acct} @ {url}")
+        _paper_checked = True
 
 
 TV_SYMBOL = {"SPY": "AMEX:SPY", "QQQ": "NASDAQ:QQQ"}
@@ -152,6 +165,7 @@ def place(token):
     if time.time() > deadline:
         return notify(f"Not placed: {sym}", "Approved too late (over 5 min), setup is stale.")
     try:
+        paper_only()
         order = trading.submit_order(MarketOrderRequest(
             symbol=sym, qty=qty, side=OrderSide.SELL if sig["side"] == "short" else OrderSide.BUY,
             time_in_force=TimeInForce.DAY, order_class=OrderClass.BRACKET,
@@ -167,6 +181,7 @@ def flatten():
     """Day trades only: close every paper position and cancel leftover stop/target orders before the bell."""
     if not trading:
         return ""
+    paper_only()
     trading.close_all_positions(cancel_orders=True)
     a = trading.get_account()
     return f"\nAlpaca paper P&L today: {float(a.equity) - float(a.last_equity):+,.2f} (equity {float(a.equity):,.2f})"
