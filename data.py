@@ -1,4 +1,4 @@
-"""1-minute bars in America/New_York with columns open/high/low/close, incl. premarket.
+"""1-minute bars in America/New_York with columns open/high/low/close/volume, incl. premarket.
 Uses Alpaca when keys are in .env, otherwise Yahoo (last ~30 days only)."""
 import os
 from datetime import datetime, timedelta
@@ -11,7 +11,7 @@ KEY, SECRET = os.getenv("ALPACA_KEY"), os.getenv("ALPACA_SECRET")
 
 
 def _clean(df):
-    df = df[["open", "high", "low", "close"]].copy()
+    df = df[["open", "high", "low", "close", "volume"]].copy()
     df.index = pd.DatetimeIndex(df.index).tz_convert(NY)
     return df.sort_index()[~df.index.duplicated()]
 

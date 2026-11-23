@@ -19,7 +19,10 @@ MIN_RR, FALLBACK_RR = 1.0, 2.0
 
 
 def mirror(df):
-    return pd.DataFrame({"open": -df.open, "high": -df.low, "low": -df.high, "close": -df.close}, index=df.index)
+    m = pd.DataFrame({"open": -df.open, "high": -df.low, "low": -df.high, "close": -df.close}, index=df.index)
+    if "volume" in df:
+        m["volume"] = df.volume
+    return m
 
 
 def pivots(h, l):
@@ -127,3 +130,67 @@ def simulate(day, sig, exit_time="15:55"):
         if t.strftime("%H:%M") >= exit_time:
             return (entry - row.close) / risk
     return (entry - d.close.iloc[-1]) / risk
+
+
+# ---------------------------------------------------------------------------
+# PB Invest: premarket high/low break-and-retest, with VWAP + 9 EMA filter (5m chart).
+# Long: a 5m candle closes above the premarket high; within 30 min price taps back to the
+# level and holds it (1m close above), while above VWAP and the 5m 9 EMA -> buy.
+# Stop just under the level; target 2R (PB: "at least 1:2"). Shorts mirror at the premarket low.
+PB_TOL = 0.0005        # "tap" = within 0.05% of the level (~$0.35 on SPY); PB says as close as possible
+PB_STOP = 0.001        # stop 0.1% through the level (stand-in for his "5m close back through it")
+PB_RR = 2.0
+PB_WINDOW = ("09:35", "11:30")   # his examples are all in the morning
+PB_RETEST_MIN = 30
+
+
+def find_pb_long(day, level):
+    if level is None or pd.isna(level):
+        return None
+    rth = day.between_time("09:30", "15:59")
+    if rth.empty:
+        return None
+    tp = (rth.high + rth.low + rth.close) / 3
+    vwap = ((tp * rth.volume).cumsum() / rth.volume.cumsum()).values
+    m5 = day.resample("5min", label="left", closed="left").agg({"close": "last"}).dropna()
+    ema = m5.close.ewm(span=9, adjust=False).mean().values
+    c5, t5 = m5.close.values, m5.index
+    five = pd.Timedelta(minutes=5)
+
+    armed = next((t + five for t, c in zip(t5, c5) if t.strftime("%H:%M") >= "09:30" and c > level), None)
+    if armed is None:
+        return None
+    t1, l1, c1 = rth.index, rth.low.values, rth.close.values
+    for k in range(t1.searchsorted(armed), len(t1)):
+        t = t1[k]
+        if t >= armed + pd.Timedelta(minutes=PB_RETEST_MIN) or t.strftime("%H:%M") > PB_WINDOW[1]:
+            return None
+        j = t5.searchsorted(t + pd.Timedelta(minutes=1) - five, side="right") - 1  # last closed 5m bar
+        if c5[j] < level:
+            return None  # closed back below the level: setup failed
+        if t.strftime("%H:%M") < PB_WINDOW[0]:
+            continue
+        if l1[k] <= level * (1 + PB_TOL) and c1[k] > level and c1[k] > vwap[k] and c5[j] > ema[j]:
+            entry = c1[k]
+            stop = level * (1 - PB_STOP)
+            return {"time": t, "bar": day.index.get_loc(t), "entry": entry, "stop": stop,
+                    "target": entry + PB_RR * (entry - stop)}
+    return None
+
+
+def find_pb(prev_day, day, side=None):
+    """side='long' / 'short' restricts to one direction (PB: calls on gainers, puts on losers)."""
+    pre = day.between_time("04:00", "09:29")
+    if pre.empty:
+        return None
+    lg = find_pb_long(day, pre.high.max()) if side != "short" else None
+    if lg:
+        lg["side"] = "long"
+    sh = find_pb_long(mirror(day), -pre.low.min()) if side != "long" else None
+    if sh:
+        sh.update(side="short", entry=-sh["entry"], stop=-sh["stop"], target=-sh["target"])
+    sigs = [x for x in (lg, sh) if x]
+    return min(sigs, key=lambda x: x["time"]) if sigs else None
+
+
+STRATEGIES = {"TJR": find_signal, "PB": find_pb}

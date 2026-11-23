@@ -5,10 +5,10 @@ import csv, math, os, sys, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import data
-from strategy import find_signal, simulate
+from strategy import find_signal, find_pb, simulate
 
-SYMBOLS = ["SPY", "QQQ"]          # alerted
-WATCH_ONLY = ["AMZN", "NVDA"]     # scored daily, never alerted, to see if they deserve alerts
+INDEXES = ["SPY", "QQQ"]
+PB_UNIVERSE = ["NVDA", "AMZN", "TSLA", "META", "AAPL", "MSFT", "AMD", "GOOGL"]  # PB's usual large caps
 ACCOUNT, RISK_PCT = 100_000, 0.01  # TradingView paper default balance; risk 1% per trade
 NY = ZoneInfo("America/New_York")
 HERE = os.path.dirname(__file__)
@@ -22,7 +22,7 @@ TV_SYMBOL = {"SPY": "AMEX:SPY", "QQQ": "NASDAQ:QQQ"}
 
 
 def tv_link(sym):
-    return f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(TV_SYMBOL[sym])}"
+    return f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(TV_SYMBOL.get(sym, sym))}"
 
 
 def notify(title, msg, sym=None):
@@ -58,7 +58,8 @@ def today_bars(sym):
 
 def alert_text(sym, sig):
     entry, stop, target = sig["entry"], sig["stop"], sig["target"]
-    qty = math.floor(ACCOUNT * RISK_PCT / abs(stop - entry))
+    # 1% risk, but never more shares than the account can pay for (tight stops would otherwise balloon size)
+    qty = min(math.floor(ACCOUNT * RISK_PCT / abs(stop - entry)), math.floor(ACCOUNT / entry))
     gain, loss = qty * abs(target - entry), qty * abs(stop - entry)
     side = "SELL SHORT" if sig["side"] == "short" else "BUY"
     msg = (f"{side} {qty} shares {sym} now (~{entry:.2f})\n"
@@ -68,42 +69,72 @@ def alert_text(sym, sig):
     return msg, qty
 
 
-def scan(start, end, sent):
-    """Alert on today's setup if its entry bar falls in [start, end] (HH:MM, NY time).
-    No saved state: find_signal returns the day's first setup, so each one is alerted once,
+def pb_picks():
+    """PB trades the day's biggest premarket gainer (long) and loser (short) among his large caps."""
+    gaps = {}
+    for sym in PB_UNIVERSE:
+        prev, day = today_bars(sym)
+        if day is None:
+            continue
+        pre, pc = day.between_time("04:00", "09:29"), prev.between_time("09:30", "15:59").close
+        if len(pre) and len(pc):
+            gaps[sym] = pre.close.iloc[-1] / pc.iloc[-1] - 1
+    if not gaps:
+        return {}
+    return {"long": max(gaps, key=gaps.get), "short": min(gaps, key=gaps.get)}
+
+
+def plan(picks):
+    """(strategy, symbol, side or None, alerted?) for today. Watch-only rows are only scored."""
+    rows = [("TJR", s, None, True) for s in INDEXES]
+    rows += [("PB", sym, side, True) for side, sym in picks.items()]
+    rows += [("PB", s, None, False) for s in INDEXES] + [("TJR", s, None, False) for s in ["AMZN", "NVDA"]]
+    return rows
+
+
+def detect(name, side, prev, day):
+    return find_signal(prev, day) if name == "TJR" else find_pb(prev, day, side)
+
+
+def scan(start, end, sent, picks):
+    """Alert on a setup if its entry bar falls in [start, end] (HH:MM, NY time).
+    No saved state: each detector returns the day's first setup, so each one is alerted once,
     and the two cloud runs split the day by entry time so they never double-alert."""
-    for sym in SYMBOLS:
+    for name, sym, side, alerted in plan(picks):
+        if not alerted or (name, sym) in sent:
+            continue
         prev, day = today_bars(sym)
         if day is None or day.empty:
             continue
-        sig = find_signal(prev, day)
-        if not sig or sym in sent or not (start <= sig["time"].strftime("%H:%M") <= end):
+        sig = detect(name, side, prev, day)
+        if not sig or not (start <= sig["time"].strftime("%H:%M") <= end):
             continue
         if sig["bar"] < len(day) - 3:
             continue  # older than ~2 min: we weren't running yet, too late to act on
-        sent.add(sym)
+        sent.add((name, sym))
         msg, _ = alert_text(sym, sig)
-        print(datetime.now(NY), msg)
-        notify(f"TJR setup: {sig['side']} {sym}", msg, sym=sym)
+        why = {"long": " (top premarket gainer)", "short": " (top premarket loser)"}.get(side, "") if name == "PB" else ""
+        print(datetime.now(NY), name, msg)
+        notify(f"{name} setup: {sig['side']} {sym}{why}", msg, sym=sym)
 
 
 def score_day():
     """Re-run today's setups on the full day and record what each would have made."""
-    lines = []
-    for sym in SYMBOLS + WATCH_ONLY:
+    lines, picks = [], pb_picks()
+    for name, sym, side, alerted in plan(picks):
         prev, day = today_bars(sym)
-        sig = find_signal(prev, day) if day is not None else None
+        sig = detect(name, side, prev, day) if day is not None else None
         if not sig:
             continue
         R = simulate(day, sig)
-        tag = "" if sym in SYMBOLS else " (watch-only)"
-        lines.append(f"{sym}{tag} {sig['side']} @ {sig['time']:%H:%M}: {R:+.2f}R (${R*ACCOUNT*RISK_PCT:+,.0f})")
-        append(RESULTS, ["date", "time", "sym", "side", "entry", "stop", "target", "R", "alerted"],
-               [sig["time"].date(), sig["time"].strftime("%H:%M"), sym, sig["side"],
-                round(sig["entry"], 2), round(sig["stop"], 2), round(sig["target"], 2), round(R, 2),
-                sym in SYMBOLS])
-    notify("Today's scorecard", "\n".join(lines) if lines else "No setups today.")
-    print("scored:", lines or "no setups today")
+        tag = "" if alerted else " (watch-only)"
+        lines.append(f"{name} {sym}{tag} {sig['side']} @ {sig['time']:%H:%M}: {R:+.2f}R (${R*ACCOUNT*RISK_PCT:+,.0f})")
+        append(RESULTS, ["date", "time", "strategy", "sym", "side", "entry", "stop", "target", "R", "alerted"],
+               [sig["time"].date(), sig["time"].strftime("%H:%M"), name, sym, sig["side"],
+                round(sig["entry"], 2), round(sig["stop"], 2), round(sig["target"], 2), round(R, 2), alerted])
+    head = f"PB picks: {picks.get('long', '-')} (long), {picks.get('short', '-')} (short)"
+    notify("Today's scorecard", head + "\n" + ("\n".join(lines) if lines else "No setups today."))
+    print("scored:", head, lines or "no setups today")
 
 
 def wait_until(hhmm):
@@ -123,11 +154,12 @@ if __name__ == "__main__":
     start, end = sys.argv[2], sys.argv[3]
     wait_until(start)
     stop_at = (datetime.strptime(end, "%H:%M") + timedelta(minutes=2)).strftime("%H:%M")  # catch the last bar
-    sent, errors = set(), 0
+    sent, errors, picks = set(), 0, None
     while datetime.now(NY).strftime("%H:%M") <= stop_at:
         time.sleep(60 - datetime.now().second + 3)  # wake ~3s after each minute closes
         try:
-            scan(start, end, sent)
+            picks = picks or pb_picks()  # premarket is over by now, so the picks are fixed for the day
+            scan(start, end, sent, picks)
         except Exception as e:
             print("scan error:", e)
             errors += 1

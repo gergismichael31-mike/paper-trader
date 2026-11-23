@@ -7,16 +7,17 @@ on:
     - cron: "0 16 * * 1-5"   # afternoon run: setups entered 12:30-15:44 NY, then the scorecard
   workflow_dispatch:
     inputs:
-      test:
-        description: "Send a test alert and exit"
-        type: boolean
-        default: true
+      mode:
+        description: "test = send a test alert; morning/afternoon = start that run now (backup if a schedule is late)"
+        type: choice
+        options: [test, morning, afternoon]
+        default: test
 
 permissions:
   contents: write   # to save results.csv back to the repo
 
 concurrency:
-  group: ${{ github.event.schedule || 'manual' }}
+  group: ${{ github.event.schedule || inputs.mode }}
 
 jobs:
   run:
@@ -33,23 +34,23 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Test alert
-        if: github.event_name == 'workflow_dispatch' && inputs.test
+        if: inputs.mode == 'test'
         run: python -c "import live; live.notify('Paper trader (cloud) test', 'Cloud bot is set up. Your Mac can be off now.')"
 
       - name: Morning scan
-        if: github.event.schedule == '0 13 * * 1-5'
+        if: github.event.schedule == '0 13 * * 1-5' || inputs.mode == 'morning'
         run: python live.py scan 09:30 12:29
 
       - name: Afternoon scan
-        if: github.event.schedule == '0 16 * * 1-5'
+        if: github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon'
         run: python live.py scan 12:30 15:44
 
       - name: Scorecard
-        if: github.event.schedule == '0 16 * * 1-5'
+        if: github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon'
         run: python live.py score
 
       - name: Save results
-        if: github.event.schedule == '0 16 * * 1-5'
+        if: github.event.schedule == '0 16 * * 1-5' || inputs.mode == 'afternoon'
         run: |
           date -u +%F > last_run.txt   # a daily commit also keeps GitHub from pausing the schedule
           git config user.name "paper-trader-bot"

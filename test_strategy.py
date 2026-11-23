@@ -11,7 +11,7 @@ def path(day, pts):
     x = [mins(pd.Timestamp(f"{day} {t}", tz="America/New_York")) for t, _ in pts]
     c = np.interp([mins(t) for t in idx], x, [p for _, p in pts])
     o = np.r_[c[0], c[:-1]]
-    return pd.DataFrame({"open": o, "high": np.maximum(o, c) + .02, "low": np.minimum(o, c) - .02, "close": c}, index=idx)
+    return pd.DataFrame({"open": o, "high": np.maximum(o, c) + .02, "low": np.minimum(o, c) - .02, "close": c, "volume": 1000.0}, index=idx)
 
 
 prev = path("2026-11-19", [("09:30", 100), ("12:00", 101), ("15:59", 99.5)])
@@ -30,3 +30,14 @@ l = find_signal(mirror(prev), m)
 assert l and l["side"] == "long" and abs(l["entry"] + s["entry"]) < 1e-9 and l["time"] == s["time"], l
 assert simulate(m, l) > 0
 print("ok", s)
+
+# PB: premarket high 100.5; 5m closes above it, pulls back to tap 100.5 while above VWAP/EMA, then runs.
+from strategy import find_pb
+pbday = path("2026-11-20", [("04:00", 100), ("07:00", 100.5), ("09:29", 100.2), ("09:30", 100.2),
+                            ("09:40", 101.2), ("09:48", 100.52), ("09:52", 101.6), ("11:00", 102.5), ("15:59", 102.4)])
+p = find_pb(prev, pbday)
+assert p and p["side"] == "long" and p["stop"] < 100.5 < p["entry"] < p["target"], p
+assert simulate(pbday, p) == 2.0, simulate(pbday, p)
+pm = find_pb(mirror(prev), mirror(pbday))
+assert pm and pm["side"] == "short" and abs(pm["entry"] + p["entry"]) < 1e-9 and pm["time"] == p["time"], pm
+print("pb ok", p)
