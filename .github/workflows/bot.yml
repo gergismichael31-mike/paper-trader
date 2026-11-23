@@ -64,5 +64,5 @@ jobs:
           git config user.name "paper-trader-bot"
           git config user.email "paper-trader-bot@users.noreply.github.com"
           git add results.csv last_run.txt 2>/dev/null || git add last_run.txt
-          git pull -q --rebase origin main
-          git commit -m "Scorecard $(date -u +%F)" && git push || echo "nothing to commit"
+          git commit -m "Scorecard $(date -u +%F)" || exit 0
+          git pull -q --rebase origin main && git push
