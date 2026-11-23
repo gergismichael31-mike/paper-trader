@@ -237,7 +237,12 @@ if __name__ == "__main__":
             now = datetime.now(NY)
             if now.strftime("%H:%M") != last_min and now.second >= 3 and now.strftime("%H:%M") <= stop_at:
                 last_min = now.strftime("%H:%M")  # scan once per minute, ~3s after the bar closes
-                picks = picks or pb_picks()  # premarket is over by now, so the picks are fixed for the day
+                if not picks:
+                    picks = pb_picks()  # premarket is over by now, so the picks are fixed for the day
+                    if start == "09:30":  # daily heartbeat: if this doesn't arrive by ~9:35, the bot isn't running
+                        notify("Bot is on", f"Watching TJR on {', '.join(INDEXES)} and PB on "
+                               f"{picks.get('long', '-')} (long) / {picks.get('short', '-')} (short) until 3:44 PM."
+                               + (" Approve buttons live." if trading else ""))
                 scan(start, end, sent, picks)
         except Exception as e:
             print("loop error:", e)
