@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approve trade</title>
+<style>
+  body { font: 18px -apple-system, system-ui, sans-serif; margin: 0; padding: 40px 16px; text-align: center;
+         background: #fff; color: #111; }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } }
+  a { display: inline-block; margin-top: 24px; padding: 14px 22px; border-radius: 10px; background: #2962ff;
+      color: #fff; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<p id="s">Sending your approval…</p>
+<a href="tradingview://">Open TradingView</a>
+<script>
+  // Link: approve.html#<approve-topic>/<one-time token>. The part after # never leaves this phone
+  // except to ntfy.sh, so the topic is not in this public page or in GitHub's logs.
+  const s = document.getElementById("s");
+  const [topic, token] = location.hash.slice(1).split("/");
+  const ok = /^[\w-]{6,64}$/;
+  if (!ok.test(topic || "") || !ok.test(token || "")) {
+    s.textContent = "This approve link is broken. Nothing was sent.";
+  } else {
+    fetch("https://ntfy.sh/" + topic, { method: "POST", body: token })
+      .then(r => {
+        if (!r.ok) throw new Error(r.status);
+        s.textContent = "Approved ✓ The bot is placing your paper trade. Opening TradingView…";
+        setTimeout(() => { location.href = "tradingview://"; }, 600);
+      })
+      .catch(() => { s.textContent = "Couldn't send the approval (no connection?). Nothing was placed — try the button in the alert again."; });
+  }
+</script>
+</body>
+</html>

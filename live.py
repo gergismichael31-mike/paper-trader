@@ -18,6 +18,7 @@ TOPIC = os.getenv("NTFY_TOPIC")
 if not TOPIC:
     sys.exit("Missing NTFY_TOPIC (.env locally, repo secret in GitHub)")
 APPROVE_TOPIC = f"{TOPIC}-ok"   # the Approve button posts the alert's one-time token here
+APPROVE_PAGE = "https://gergismichael31-mike.github.io/paper-trader/approve.html"  # docs/approve.html
 APPROVE_SECS = 300              # an approval older than 5 min is refused: the setup is stale by then
 
 trading = None
@@ -55,7 +56,8 @@ def notify(title, msg, sym=None, token=None):
         # Tap opens the TradingView app (tested: the app scheme can't jump to a symbol); button opens the chart on the web.
         actions = [f"view, Open app, tradingview://", f"view, {sym} chart (web), {tv_link(sym)}"]
         if token:
-            actions.insert(0, f"http, Approve trade, https://ntfy.sh/{APPROVE_TOPIC}, method=POST, body={token}, clear=true")
+            # opens a tiny page that posts the approval, then jumps into the TradingView app to watch the trade
+            actions.insert(0, f"view, Approve trade, {APPROVE_PAGE}#{APPROVE_TOPIC}/{token}, clear=true")
         headers.update({"Click": "tradingview://", "Actions": "; ".join(actions)})
     req = urllib.request.Request(f"https://ntfy.sh/{TOPIC}", data=msg.encode(), headers=headers)
     try:
