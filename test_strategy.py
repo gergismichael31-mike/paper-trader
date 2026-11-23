@@ -40,4 +40,6 @@ assert p and p["side"] == "long" and p["stop"] < 100.5 < p["entry"] < p["target"
 assert simulate(pbday, p) == 2.0, simulate(pbday, p)
 pm = find_pb(mirror(prev), mirror(pbday))
 assert pm and pm["side"] == "short" and abs(pm["entry"] + p["entry"]) < 1e-9 and pm["time"] == p["time"], pm
+assert pm["stop"] > pm["entry"] > pm["target"] and abs(pm["stop"] + p["stop"]) < 1e-9, pm  # short stop above entry
+assert simulate(mirror(pbday), pm) == 2.0
 print("pb ok", p)

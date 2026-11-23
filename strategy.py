@@ -170,9 +170,10 @@ def find_pb_long(day, level):
             return None  # closed back below the level: setup failed
         if t.strftime("%H:%M") < PB_WINDOW[0]:
             continue
-        if l1[k] <= level * (1 + PB_TOL) and c1[k] > level and c1[k] > vwap[k] and c5[j] > ema[j]:
+        # offsets use abs(level) so mirrored (negative) prices for shorts move the same way
+        if l1[k] <= level + abs(level) * PB_TOL and c1[k] > level and c1[k] > vwap[k] and c5[j] > ema[j]:
             entry = c1[k]
-            stop = level * (1 - PB_STOP)
+            stop = level - abs(level) * PB_STOP
             return {"time": t, "bar": day.index.get_loc(t), "entry": entry, "stop": stop,
                     "target": entry + PB_RR * (entry - stop)}
     return None
