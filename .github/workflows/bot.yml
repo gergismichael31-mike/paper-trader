@@ -1,0 +1,58 @@
+name: paper-trader
+
+on:
+  schedule:
+    # UTC times, started early because GitHub can delay scheduled runs; the script waits for the NY time itself.
+    - cron: "0 13 * * 1-5"   # morning run: setups entered 09:30-12:29 NY
+    - cron: "0 16 * * 1-5"   # afternoon run: setups entered 12:30-15:44 NY, then the scorecard
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Send a test alert and exit"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # to save results.csv back to the repo
+
+concurrency:
+  group: ${{ github.event.schedule || 'manual' }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Test alert
+        if: github.event_name == 'workflow_dispatch' && inputs.test
+        run: python -c "import live; live.notify('Paper trader (cloud) test', 'Cloud bot is set up. Your Mac can be off now.')"
+
+      - name: Morning scan
+        if: github.event.schedule == '0 13 * * 1-5'
+        run: python live.py scan 09:30 12:29
+
+      - name: Afternoon scan
+        if: github.event.schedule == '0 16 * * 1-5'
+        run: python live.py scan 12:30 15:44
+
+      - name: Scorecard
+        if: github.event.schedule == '0 16 * * 1-5'
+        run: python live.py score
+
+      - name: Save results
+        if: github.event.schedule == '0 16 * * 1-5'
+        run: |
+          date -u +%F > last_run.txt   # a daily commit also keeps GitHub from pausing the schedule
+          git config user.name "paper-trader-bot"
+          git config user.email "paper-trader-bot@users.noreply.github.com"
+          git add results.csv last_run.txt 2>/dev/null || git add last_run.txt
+          git commit -m "Scorecard $(date -u +%F)" && git push || echo "nothing to commit"

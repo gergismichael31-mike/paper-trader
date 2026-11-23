@@ -1,0 +1,217 @@
+//@version=6
+// TJR liquidity-sweep setup, same rules as strategy.py. Use on a 1-minute SPY or QQQ chart
+// with extended hours ON (for premarket levels). Alert: "Any alert() function call".
+indicator("TJR Sweep Setup", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+lastEntry = input.int(1544, "Last entry time (HHMM, New York)")
+riskUsd   = input.float(1000, "Risk per trade ($)")
+TZ = "America/New_York"
+
+hm     = hour(time, TZ) * 100 + minute(time, TZ)
+newDay = ta.change(dayofmonth(time, TZ)) != 0
+
+// ---- liquidity levels: previous-day RTH high/low, today's premarket high/low
+var float rthHi = na
+var float rthLo = na
+var float pdh = na
+var float pdl = na
+var float pmh = na
+var float pml = na
+if newDay
+    pdh := rthHi
+    pdl := rthLo
+    rthHi := na
+    rthLo := na
+    pmh := na
+    pml := na
+if hm >= 400 and hm < 930
+    pmh := na(pmh) ? high : math.max(pmh, high)
+    pml := na(pml) ? low : math.min(pml, low)
+
+// ---- build 5-minute bars from the 1-minute chart
+var float b5h = na
+var float b5l = na
+var int   b5t = na
+if minute(time, TZ) % 5 == 0 or newDay or na(b5h)
+    b5h := high
+    b5l := low
+    b5t := time
+else
+    b5h := math.max(b5h, high)
+    b5l := math.min(b5l, low)
+closed5 = minute(time, TZ) % 5 == 4
+b5hm = hour(b5t, TZ) * 100 + minute(b5t, TZ)
+
+var a5h = array.new<float>()
+var a5l = array.new<float>()
+var a5c = array.new<float>()
+if newDay
+    a5h.clear()
+    a5l.clear()
+    a5c.clear()
+if closed5
+    a5h.push(b5h)
+    a5l.push(b5l)
+    a5c.push(close)
+
+// ---- one state machine per side. Shorts use real prices; longs use mirrored prices
+// (negated, high<->low) so both sides follow identical rules, as in strategy.py.
+type Side
+    float s
+    int   stage = 0          // 0 wait sweep, 1 swept, 2 reversal confirmed, 3 pulled back, 4 done
+    float sweepHi = na
+    float runMax = na
+    float lastPL5 = na
+    float lastFvg = na
+    float lastPH1 = na
+    float lastPL1 = na
+    array<float> pool
+
+newSide(float s) =>
+    Side.new(s, pool = array.new<float>())
+
+hi_(float s, float h, float l) => s > 0 ? h : -l
+lo_(float s, float h, float l) => s > 0 ? l : -h
+
+step(Side sd, float up1, float up2, float dn1, float dn2) =>
+    s  = sd.s
+    H  = hi_(s, high, low)
+    L  = lo_(s, high, low)
+    C  = s > 0 ? close : -close
+    H1 = hi_(s, high[1], low[1])
+    H2 = hi_(s, high[2], low[2])
+    L1 = lo_(s, high[1], low[1])
+    L2 = lo_(s, high[2], low[2])
+    bool justConfirmed = false
+    // 5m stage: sweep -> 5m break of structure / inverse FVG
+    if closed5
+        n  = a5h.size()
+        i  = n - 1
+        h5 = hi_(s, a5h.get(i), a5l.get(i))
+        l5 = lo_(s, a5h.get(i), a5l.get(i))
+        c5 = s > 0 ? a5c.get(i) : -a5c.get(i)
+        if b5hm >= 930 and sd.stage <= 1
+            if b5hm > lastEntry
+                sd.stage := 4
+            else if sd.stage == 0
+                if h5 > up1 or h5 > up2
+                    sd.stage := 1
+                    sd.sweepHi := h5
+            else
+                sd.sweepHi := math.max(sd.sweepHi, h5)
+                if (not na(sd.lastPL5) and c5 < sd.lastPL5) or (not na(sd.lastFvg) and c5 < sd.lastFvg)
+                    sd.stage := 2
+                    justConfirmed := true
+        if n >= 3
+            hA = hi_(s, a5h.get(i - 2), a5l.get(i - 2))
+            lA = lo_(s, a5h.get(i - 2), a5l.get(i - 2))
+            lB = lo_(s, a5h.get(i - 1), a5l.get(i - 1))
+            if l5 > hA
+                sd.lastFvg := hA
+            if lB < lA and lB <= l5
+                sd.lastPL5 := lB
+                sd.pool.push(lB)
+    // 1m stage: pullback breaks structure against us, then back our way -> entry
+    bool  fired  = false
+    float entry  = na
+    float stop   = na
+    float target = na
+    if sd.stage >= 2 and sd.stage <= 3 and not justConfirmed
+        if hm > lastEntry or H > sd.sweepHi
+            sd.stage := 4
+        else
+            sd.runMax := na(sd.runMax) ? H : math.max(sd.runMax, H)
+            if sd.stage == 2
+                if not na(sd.lastPH1) and C > sd.lastPH1
+                    sd.stage := 3
+            else if not na(sd.lastPL1) and C < sd.lastPL1
+                entry := C
+                stop  := sd.runMax + 0.02
+                risk  = stop - entry
+                float best = na
+                for lv in sd.pool
+                    if entry - lv >= risk and (na(best) or lv > best)
+                        best := lv
+                if not na(dn1) and entry - dn1 >= risk and (na(best) or dn1 > best)
+                    best := dn1
+                if not na(dn2) and entry - dn2 >= risk and (na(best) or dn2 > best)
+                    best := dn2
+                target := na(best) ? entry - 2 * risk : best
+                fired  := true
+                sd.stage := 4
+    // 1m swing points, usable from the next bar
+    if H1 > H2 and H1 >= H
+        sd.lastPH1 := H1
+    if L1 < L2 and L1 <= L
+        sd.lastPL1 := L1
+    [fired, entry, stop, target]
+
+var Side shortSide = newSide(1.0)
+var Side longSide  = newSide(-1.0)
+var bool doneToday = false
+if newDay
+    shortSide := newSide(1.0)
+    longSide  := newSide(-1.0)
+    doneToday := false
+
+[fS, eS, sS, tS] = step(shortSide, pdh, pmh, pdl, pml)
+[fL, eL, sL, tL] = step(longSide, -pdl, -pml, -pdh, -pmh)
+
+fmt(float x) => str.tostring(x, "#,##0.00")
+var sigLog = array.new<string>()
+bool  sigNow = false
+float aE = na
+float aS = na
+float aT = na
+float aQ = na
+
+if not doneToday and (fS or fL)
+    isShort = fS
+    entry   = isShort ? eS : -eL
+    stop    = isShort ? sS : -sL
+    target  = isShort ? tS : -tL
+    risk    = math.abs(stop - entry)
+    qty     = math.floor(riskUsd / risk)
+    gain    = qty * math.abs(target - entry)
+    loss    = qty * risk
+    side    = isShort ? "SELL SHORT" : "BUY"
+    msg = side + " " + str.tostring(qty) + " " + syminfo.ticker + " @ ~" + fmt(entry) +
+          "\nTarget " + fmt(target) + ": +$" + str.tostring(gain, "#,##0") + " (" + str.tostring(math.abs(target - entry) / entry * 100, "#.##") + "%)" +
+          "\nStop " + fmt(stop) + ": -$" + str.tostring(loss, "#,##0") + " (" + str.tostring(risk / entry * 100, "#.##") + "%)"
+    line.new(bar_index, entry,  bar_index + 45, entry,  color = color.blue,  width = 2)
+    line.new(bar_index, stop,   bar_index + 45, stop,   color = color.red,   width = 2)
+    line.new(bar_index, target, bar_index + 45, target, color = color.green, width = 2)
+    label.new(bar_index, isShort ? high : low, msg, color = isShort ? color.red : color.green, textcolor = color.white,
+              style = isShort ? label.style_label_down : label.style_label_up, size = size.small)
+    alert(msg, alert.freq_once_per_bar_close)
+    sigLog.push(str.format_time(time, "MM-dd HH:mm", TZ) + (isShort ? "  SHORT " : "  LONG  ") + fmt(entry) + " / " + fmt(stop) + " / " + fmt(target))
+    if sigLog.size() > 8
+        sigLog.shift()
+    sigNow := true
+    aE := entry
+    aS := stop
+    aT := target
+    aQ := isShort ? -qty : qty
+    doneToday := true
+
+// Alert-dialog condition (works on every plan). Shares are negative for a short.
+plot(aE, "Entry",  display = display.data_window)
+plot(aS, "Stop",   display = display.data_window)
+plot(aT, "Target", display = display.data_window)
+plot(aQ, "Shares", display = display.data_window)
+alertcondition(sigNow, "TJR setup", "TJR setup {{ticker}}: Shares {{plot(\"Shares\")}} (minus = SELL SHORT, plus = BUY) @ {{plot(\"Entry\")}} | Stop {{plot(\"Stop\")}} | Target {{plot(\"Target\")}}")
+
+var table tb = table.new(position.top_right, 1, 9, bgcolor = color.new(color.white, 10))
+if barstate.islast
+    table.cell(tb, 0, 0, "TJR setups (NY time): entry / stop / target", text_size = size.small)
+    for i = 0 to 7
+        table.cell(tb, 0, i + 1, i < sigLog.size() ? sigLog.get(i) : "", text_size = size.small, text_halign = text.align_left)
+
+if hm >= 930 and hm < 1600
+    rthHi := na(rthHi) ? high : math.max(rthHi, high)
+    rthLo := na(rthLo) ? low : math.min(rthLo, low)
+
+plot(pdh, "Prev day high", color.new(color.orange, 30), style = plot.style_linebr)
+plot(pdl, "Prev day low",  color.new(color.orange, 30), style = plot.style_linebr)
+plot(pmh, "Premarket high", color.new(color.purple, 30), style = plot.style_linebr)
+plot(pml, "Premarket low",  color.new(color.purple, 30), style = plot.style_linebr)
