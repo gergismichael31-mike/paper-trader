@@ -1,10 +1,11 @@
 //@version=6
-// TJR liquidity-sweep setup, same rules as strategy.py. Use on a 1-minute SPY or QQQ chart
+// TJR liquidity-sweep + PB Invest premarket-retest setups, same rules as strategy.py. Use on a 1-minute SPY or QQQ chart
 // with extended hours ON (for premarket levels). Alert: "Any alert() function call".
-indicator("TJR Sweep Setup", overlay = true, max_lines_count = 500, max_labels_count = 500)
+indicator("TJR + PB Setups", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
 lastEntry = input.int(1544, "Last entry time (HHMM, New York)")
 riskUsd   = input.float(1000, "Risk per trade ($)")
+account   = input.float(100000, "Account size ($)")
 TZ = "America/New_York"
 
 hm     = hour(time, TZ) * 100 + minute(time, TZ)
@@ -159,23 +160,14 @@ if newDay
 
 fmt(float x) => str.tostring(x, "#,##0.00")
 var sigLog = array.new<string>()
-bool  sigNow = false
-float aE = na
-float aS = na
-float aT = na
-float aQ = na
 
-if not doneToday and (fS or fL)
-    isShort = fS
-    entry   = isShort ? eS : -eL
-    stop    = isShort ? sS : -sL
-    target  = isShort ? tS : -tL
-    risk    = math.abs(stop - entry)
-    qty     = math.floor(riskUsd / risk)
-    gain    = qty * math.abs(target - entry)
-    loss    = qty * risk
-    side    = isShort ? "SELL SHORT" : "BUY"
-    msg = side + " " + str.tostring(qty) + " " + syminfo.ticker + " @ ~" + fmt(entry) +
+// Draw a setup: entry (blue), stop (red), target (green), a label with size and $, the log table, and an alert() call.
+fire(string name, bool isShort, float entry, float stop, float target) =>
+    risk = math.abs(stop - entry)
+    qty  = math.min(math.floor(riskUsd / risk), math.floor(account / entry))  // never more than the account can buy
+    gain = qty * math.abs(target - entry)
+    loss = qty * risk
+    msg = name + ": " + (isShort ? "SELL SHORT " : "BUY ") + str.tostring(qty) + " " + syminfo.ticker + " @ ~" + fmt(entry) +
           "\nTarget " + fmt(target) + ": +$" + str.tostring(gain, "#,##0") + " (" + str.tostring(math.abs(target - entry) / entry * 100, "#.##") + "%)" +
           "\nStop " + fmt(stop) + ": -$" + str.tostring(loss, "#,##0") + " (" + str.tostring(risk / entry * 100, "#.##") + "%)"
     line.new(bar_index, entry,  bar_index + 45, entry,  color = color.blue,  width = 2)
@@ -184,17 +176,89 @@ if not doneToday and (fS or fL)
     label.new(bar_index, isShort ? high : low, msg, color = isShort ? color.red : color.green, textcolor = color.white,
               style = isShort ? label.style_label_down : label.style_label_up, size = size.small)
     alert(msg, alert.freq_once_per_bar_close)
-    sigLog.push(str.format_time(time, "MM-dd HH:mm", TZ) + (isShort ? "  SHORT " : "  LONG  ") + fmt(entry) + " / " + fmt(stop) + " / " + fmt(target))
+    sigLog.push(str.format_time(time, "MM-dd HH:mm", TZ) + "  " + name + (isShort ? " SHORT " : " LONG  ") + fmt(entry) + " / " + fmt(stop) + " / " + fmt(target))
     if sigLog.size() > 8
         sigLog.shift()
+    qty
+
+bool  sigNow = false
+float aE = na
+float aS = na
+float aT = na
+float aQ = na
+if not doneToday and (fS or fL)
+    isShort = fS
+    entry   = isShort ? eS : -eL
+    stop    = isShort ? sS : -sL
+    target  = isShort ? tS : -tL
+    q = fire("TJR", isShort, entry, stop, target)
     sigNow := true
     aE := entry
     aS := stop
     aT := target
-    aQ := isShort ? -qty : qty
+    aQ := isShort ? -q : q
     doneToday := true
 
-// Alert-dialog condition (works on every plan). Shares are negative for a short.
+// ---- PB Invest: premarket high/low break-and-retest with VWAP + 5m 9 EMA (same rules as find_pb in strategy.py)
+pbTol  = 0.0005
+pbStop = 0.001
+var float cumPV = 0.0
+var float cumV  = 0.0
+if hm >= 930 and (newDay or hm[1] < 930)
+    cumPV := 0.0
+    cumV  := 0.0
+if hm >= 930 and hm < 1600
+    cumPV += hlc3 * volume
+    cumV  += volume
+vw = cumV > 0 ? cumPV / cumV : na
+
+var float ema5  = na
+var float lastC5 = na
+var float lastE5 = na
+var int   pbLArm = na
+var int   pbSArm = na
+var bool  pbLDone = false
+var bool  pbSDone = false
+var bool  pbDay   = false   // one PB setup per day, like the bot
+if newDay
+    ema5 := na
+    pbLArm := na
+    pbSArm := na
+    pbLDone := false
+    pbSDone := false
+    pbDay := false
+bool justL = false
+bool justS = false
+if closed5
+    ema5   := na(ema5) ? close : ema5 + 0.2 * (close - ema5)   // 9-period EMA of 5m closes
+    lastC5 := close
+    lastE5 := ema5
+    if b5hm >= 930 and not na(pmh) and na(pbLArm) and close > pmh
+        pbLArm := time + 60000
+        justL := true
+    if b5hm >= 930 and not na(pml) and na(pbSArm) and close < pml
+        pbSArm := time + 60000
+        justS := true
+
+if not na(pbLArm) and not pbLDone and not justL and not pbDay
+    if time >= pbLArm + 30 * 60000 or hm > 1130 or lastC5 < pmh
+        pbLDone := true
+    else if hm >= 935 and low <= pmh + pmh * pbTol and close > pmh and close > vw and lastC5 > lastE5
+        st = pmh - pmh * pbStop
+        fire("PB", false, close, st, close + 2 * (close - st))
+        pbLDone := true
+        pbDay := true
+if not na(pbSArm) and not pbSDone and not justS and not pbDay
+    if time >= pbSArm + 30 * 60000 or hm > 1130 or lastC5 > pml
+        pbSDone := true
+    else if hm >= 935 and high >= pml - pml * pbTol and close < pml and close < vw and lastC5 < lastE5
+        st = pml + pml * pbStop
+        fire("PB", true, close, st, close - 2 * (st - close))
+        pbSDone := true
+        pbDay := true
+plot(vw, "VWAP (from 9:30)", color.new(color.teal, 20), style = plot.style_linebr)
+
+// Alert-dialog condition for TJR (paid TradingView plans). Shares are negative for a short.
 plot(aE, "Entry",  display = display.data_window)
 plot(aS, "Stop",   display = display.data_window)
 plot(aT, "Target", display = display.data_window)
@@ -203,7 +267,7 @@ alertcondition(sigNow, "TJR setup", "TJR setup {{ticker}}: Shares {{plot(\"Share
 
 var table tb = table.new(position.top_right, 1, 9, bgcolor = color.new(color.white, 10))
 if barstate.islast
-    table.cell(tb, 0, 0, "TJR setups (NY time): entry / stop / target", text_size = size.small)
+    table.cell(tb, 0, 0, "Setups (NY time): entry / stop / target", text_size = size.small)
     for i = 0 to 7
         table.cell(tb, 0, i + 1, i < sigLog.size() ? sigLog.get(i) : "", text_size = size.small, text_halign = text.align_left)
 

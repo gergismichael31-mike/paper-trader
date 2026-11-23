@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 340
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      ALPACA_KEY: ${{ secrets.ALPACA_KEY }}       # Alpaca PAPER keys: enable the Approve button
+      ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
       PYTHONUNBUFFERED: "1"   # show prints in the live log
     steps:
       - uses: actions/checkout@v4

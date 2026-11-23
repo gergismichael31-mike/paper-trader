@@ -17,7 +17,7 @@ def _clean(df):
 
 
 def load(symbol, start, end, live=False):
-    if KEY and SECRET:
+    if KEY and SECRET and os.getenv("ALPACA_DATA"):  # keys are for paper orders; prices stay on Yahoo unless asked
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
