@@ -28,6 +28,7 @@ if data.KEY and data.SECRET:
     from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
     trading = TradingClient(data.KEY, data.SECRET, paper=True)  # PAPER ONLY - never change this
 pending = {}  # one-time token -> (sym, sig, qty, deadline)
+stale = set()  # (strategy, symbol) setups already logged as too old to alert
 _paper_checked = False
 
 
@@ -137,10 +138,18 @@ def scan(start, end, sent, picks):
         sig = detect(name, side, prev, day)
         if not sig or not (start <= sig["time"].strftime("%H:%M") <= end):
             continue
-        if sig["bar"] < len(day) - 3:
-            continue  # older than ~2 min: we weren't running yet, too late to act on
+        # Time-based, not bar-count: Yahoo sometimes serves a bar late or revised (SPY 9:52 on 2026-11-23
+        # was dropped by the old 3-bar rule). Bar t closes at t+1 min; 6 min covers that lag.
+        age = (datetime.now(NY) - sig["time"]).total_seconds() / 60 - 1
+        if age > 6:
+            if (name, sym) not in stale:
+                stale.add((name, sym))
+                print(datetime.now(NY), f"skipped stale {name} {sym} setup from {sig['time']:%H:%M} ({age:.0f} min old)")
+            continue
         sent.add((name, sym))
         msg, qty = alert_text(sym, sig)
+        if age >= 2:
+            msg += f"\n(Setup closed {age:.0f} min ago: check price is still near entry)"
         why = {"long": " (top premarket gainer)", "short": " (top premarket loser)"}.get(side, "") if name == "PB" else ""
         token = None
         if trading and qty >= 1:
