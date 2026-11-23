@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 340
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      PYTHONUNBUFFERED: "1"   # show prints in the live log
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
