@@ -1,0 +1,5 @@
+date,time,strategy,sym,side,entry,stop,target,R,alerted
+2026-11-23,09:52,TJR,SPY,short,716.82,720.49,709.63,-1.0,True
+2026-11-23,09:52,TJR,QQQ,short,643.39,648.5,631.35,-1.0,True
+2026-11-23,10:00,PB,SPY,long,721.26,720.2,723.38,-1.0,False
+2026-11-23,10:29,TJR,AMZN,short,256.98,258.13,255.54,-1.0,False
