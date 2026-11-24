@@ -10,17 +10,18 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "test = send a test alert; morning/afternoon = start that run now (backup if a schedule is late)"
+        description: "test = send a test alert; morning/afternoon = start that run now; relay = keep the daily starts going"
         type: choice
-        options: [test, morning, afternoon]
+        options: [test, morning, afternoon, relay]
         default: test
 
 permissions:
   contents: write   # to save results.csv back to the repo
+  actions: write    # relay starts the next runs itself
 
 concurrency:
   # a late scheduled run and a manual backup of the same run share a lane: the second waits, then finds nothing to do
-  group: ${{ (github.event.schedule == '5,25,45 12,13 * * 1-5' || inputs.mode == 'morning') && 'morning' || (github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon') && 'afternoon' || 'test' }}
+  group: ${{ (github.event.schedule == '5,25,45 12,13 * * 1-5' || inputs.mode == 'morning') && 'morning' || (github.event.schedule == '5,25,45 15,16 * * 1-5' || inputs.mode == 'afternoon') && 'afternoon' || inputs.mode == 'relay' && 'relay' || 'test' }}
 
 jobs:
   run:
@@ -52,6 +53,33 @@ jobs:
               msg = "Cloud bot is set up (alert-only: no Alpaca keys found)."
           print(msg)
           live.notify("Paper trader (cloud) test", msg)
+          PY
+
+      - name: Relay
+        # GitHub skipped every cron on 2026-11-24, so runs also start themselves: each relay waits (max 5h)
+        # for the next 09:10 / 12:10 NY weekday start, dispatches that run, then dispatches the next relay.
+        if: inputs.mode == 'relay'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import subprocess, time
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          NY = ZoneInfo("America/New_York")
+          now = datetime.now(NY)
+          starts = [datetime.combine(now.date() + timedelta(days=i), datetime.strptime(hm, "%H:%M").time(), NY)
+                    for i in range(8) for hm in ("09:10", "12:10")]
+          t = min(x for x in starts if x > now and x.weekday() < 5)
+          mode = "morning" if t.hour == 9 else "afternoon"
+          run = lambda m: subprocess.run(["gh", "workflow", "run", "bot.yml", "-f", f"mode={m}"], check=True)
+          if (t - now).total_seconds() <= 5 * 3600:
+              print("waiting for", t, mode)
+              time.sleep((t - now).total_seconds())
+              run(mode)
+          else:
+              print("next start", t, "is over 5h away, handing off")
+          run("relay")
           PY
 
       - name: Morning scan
