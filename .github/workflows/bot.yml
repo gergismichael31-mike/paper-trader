@@ -86,7 +86,8 @@ jobs:
               time.sleep((t - now).total_seconds())
               run(mode)
           else:
-              print("next start", t, "is over 5h away, handing off")
+              print("next start", t, "is over 5h away: waiting 5h, then handing off")
+              time.sleep(5 * 3600)  # without this the relay restarted itself every ~20s (2026-11-25)
           run("relay")
           PY
 
