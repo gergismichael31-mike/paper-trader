@@ -1,4 +1,5 @@
 """Synthetic textbook short: sweep premarket/PDH, 5m BOS down, 1m pullback up, 1m BOS down."""
+import os
 import numpy as np
 import pandas as pd
 from strategy import find_signal, mirror, simulate
@@ -43,3 +44,15 @@ assert pm and pm["side"] == "short" and abs(pm["entry"] + p["entry"]) < 1e-9 and
 assert pm["stop"] > pm["entry"] > pm["target"] and abs(pm["stop"] + p["stop"]) < 1e-9, pm  # short stop above entry
 assert simulate(mirror(pbday), pm) == 2.0
 print("pb ok", p)
+
+# Approve-time price check (live.rr_left): today's NVDA short fill at the target must be refused.
+os.environ.setdefault("NTFY_TOPIC", "test")
+import live
+nv = {"entry": 142.71, "stop": 142.88, "target": 142.38}
+assert live.rr_left(nv, 142.38) == 0           # already at target -> refuse
+assert live.rr_left(nv, 142.90) == 0           # past the stop -> refuse
+assert live.rr_left(nv, 142.71) > 1.9          # at entry -> ~2x, place
+assert live.rr_left(nv, 142.55) < 1.0          # halfway to target -> refuse
+lg = {"entry": 100.0, "stop": 99.0, "target": 102.0}
+assert live.rr_left(lg, 100.2) > 1.0 and live.rr_left(lg, 101.5) < 1.0
+print("rr_left ok")

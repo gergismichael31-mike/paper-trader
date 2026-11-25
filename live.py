@@ -171,19 +171,45 @@ def check_approvals(since):
         pending.pop(tok)  # expired: Approve did nothing in time
 
 
+MIN_RR_LEFT = 1.0  # at the moment of placing, the target must still be at least as far away as the stop
+
+
+def rr_left(sig, price):
+    """Reward/risk still on the table at `price` (side-independent). <= 0 means price already hit the target or stop."""
+    reward, risk = abs(sig["target"] - price), abs(sig["stop"] - price)
+    between = min(sig["stop"], sig["target"]) < price < max(sig["stop"], sig["target"])
+    return reward / risk if between and risk else 0.0
+
+
+def last_price(sym):
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockLatestTradeRequest
+    from alpaca.data.enums import DataFeed
+    client = StockHistoricalDataClient(data.KEY, data.SECRET)
+    return float(client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=sym, feed=DataFeed.IEX))[sym].price)
+
+
 def place(token):
     sym, sig, qty, deadline = pending.pop(token)
     if time.time() > deadline:
         return notify(f"Not placed: {sym}", "Approved too late (over 5 min), setup is stale.")
     try:
         paper_only()
+        # 2026-11-25: NVDA short alerted at 142.71 filled at 142.38 = the target, so the trade was already over.
+        price = last_price(sym)
+        left = rr_left(sig, price)
+        if left < MIN_RR_LEFT:
+            return notify(f"Skipped: {sym} already moved", f"Price is {price:.2f} now (alert entry {sig['entry']:.2f}, "
+                          f"stop {sig['stop']:.2f}, target {sig['target']:.2f}). Only {left:.1f}x reward/risk left, "
+                          f"so no order was placed.")
         order = trading.submit_order(MarketOrderRequest(
             symbol=sym, qty=qty, side=OrderSide.SELL if sig["side"] == "short" else OrderSide.BUY,
             time_in_force=TimeInForce.DAY, order_class=OrderClass.BRACKET,
             take_profit=TakeProfitRequest(limit_price=round(sig["target"], 2)),
             stop_loss=StopLossRequest(stop_price=round(sig["stop"], 2))))
         notify(f"Order placed: {sig['side']} {qty} {sym}",
-               f"Paper order sent. Stop {sig['stop']:.2f}, target {sig['target']:.2f} are attached.\nOrder {order.id}")
+               f"Paper order sent at ~{price:.2f} ({left:.1f}x reward/risk left). Stop {sig['stop']:.2f}, target {sig['target']:.2f} "
+               f"are attached.\nOrder {order.id}")
     except Exception as e:  # e.g. price already past the stop/target: Alpaca rejects the bracket
         notify(f"Not placed: {sym}", f"Alpaca refused the order: {str(e)[:250]}")
 

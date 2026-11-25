@@ -54,6 +54,7 @@ jobs:
               for o in live.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=5, nested=True)):
                   legs = ", ".join(f"{g.type.value} {g.status.value}" for g in (o.legs or []))
                   msg += f"\n{o.submitted_at:%m-%d %H:%M}Z {o.side.value} {o.qty} {o.symbol}: {o.status.value} @ {o.filled_avg_price} [{legs}]"
+              msg += f"\nLive price check works: SPY {live.last_price('SPY'):.2f}"
               for p in live.trading.get_all_positions():
                   msg += f"\nOPEN {p.qty} {p.symbol} avg {p.avg_entry_price}, now {p.current_price}, P&L ${float(p.unrealized_pl):,.2f}"
           else:
