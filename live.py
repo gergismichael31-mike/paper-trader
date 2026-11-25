@@ -224,7 +224,7 @@ def flatten():
     return f"\nAlpaca paper P&L today: {float(a.equity) - float(a.last_equity):+,.2f} (equity {float(a.equity):,.2f})"
 
 
-def score_day(pnl=""):
+def score_day(pnl="", exit_time="15:55"):
     """Re-run today's setups on the full day and record what each would have made."""
     lines, picks = [], pb_picks()
     for name, sym, side, alerted in plan(picks):
@@ -232,7 +232,7 @@ def score_day(pnl=""):
         sig = detect(name, side, prev, day) if day is not None else None
         if not sig:
             continue
-        R = simulate(day, sig)
+        R = simulate(day, sig, exit_time)
         tag = "" if alerted else " (watch-only)"
         lines.append(f"{name} {sym}{tag} {sig['side']} @ {sig['time']:%H:%M}: {R:+.2f}R (${R*ACCOUNT*RISK_PCT:+,.0f})")
         append(RESULTS, ["date", "time", "strategy", "sym", "side", "entry", "stop", "target", "R", "alerted"],
@@ -241,6 +241,25 @@ def score_day(pnl=""):
     head = f"PB picks: {picks.get('long', '-')} (long), {picks.get('short', '-')} (short)"
     notify("Today's scorecard", head + "\n" + ("\n".join(lines) if lines else "No setups today.") + pnl)
     print("scored:", head, lines or "no setups today")
+
+
+def market_close(day=None):
+    """Close time (HH:MM NY) from Alpaca's market calendar: "13:00" on half days, None on holidays.
+    Without Alpaca keys, or if the calendar call fails, assume a normal 16:00 close."""
+    day = day or datetime.now(NY).date()
+    if not trading:
+        return "16:00"
+    try:
+        from alpaca.trading.requests import GetCalendarRequest
+        cal = trading.get_calendar(GetCalendarRequest(start=day, end=day))
+    except Exception as e:
+        print("calendar failed, assuming 16:00 close:", e)
+        return "16:00"
+    return cal[0].close.strftime("%H:%M") if cal and cal[0].date == day else None
+
+
+def shift(hhmm, minutes):
+    return (datetime.strptime(hhmm, "%H:%M") + timedelta(minutes=minutes)).strftime("%H:%M")
 
 
 def wait_until(hhmm):
@@ -252,14 +271,23 @@ if __name__ == "__main__":
     # live.py scan 09:30 12:29   -> alerts for setups entered 09:30-12:29
     # live.py score              -> end-of-day scorecard (run after 15:56)
     if datetime.now(NY).weekday() >= 5:
-        sys.exit("Weekend.")
-    if sys.argv[1:2] == ["score"]:
-        wait_until("15:55")
-        pnl = flatten()
-        wait_until("15:57")
-        score_day(pnl)
+        print("Weekend.")
         sys.exit()
-    start, end = sys.argv[2], sys.argv[3]
+    close = market_close()  # half days (e.g. day after Thanksgiving) close at 13:00
+    if close is None:
+        print("Market holiday: nothing to do.")
+        sys.exit()
+    last_entry = shift(close, -16)  # 15:44 on a normal day: leaves time before the exit at close-5
+    if sys.argv[1:2] == ["score"]:
+        wait_until(shift(close, -5))
+        pnl = flatten()
+        wait_until(shift(close, -3))
+        score_day(pnl, shift(close, -5))
+        sys.exit()
+    start, end = sys.argv[2], min(sys.argv[3], last_entry)
+    if start > end:
+        print(f"Early close at {close}: this window has nothing to scan.")
+        sys.exit()
     wait_until(start)
     stop_at = (datetime.strptime(end, "%H:%M") + timedelta(minutes=2)).strftime("%H:%M")  # catch the last bar
     sent, errors, picks, last_min, since = set(), 0, None, None, int(time.time())
@@ -276,7 +304,9 @@ if __name__ == "__main__":
                     picks = pb_picks()  # premarket is over by now, so the picks are fixed for the day
                     if start == "09:30":  # daily heartbeat: if this doesn't arrive by ~9:35, the bot isn't running
                         notify("Bot is on", f"Watching TJR on {', '.join(INDEXES)} and PB on "
-                               f"{picks.get('long', '-')} (long) / {picks.get('short', '-')} (short) until 3:44 PM."
+                               f"{picks.get('long', '-')} (long) / {picks.get('short', '-')} (short) until "
+                               f"{datetime.strptime(last_entry, '%H:%M'):%-I:%M %p}."
+                               + (f" Early close today ({close})." if close != "16:00" else "")
                                + (" Approve buttons live." if trading else ""))
                 scan(start, end, sent, picks)
         except Exception as e:

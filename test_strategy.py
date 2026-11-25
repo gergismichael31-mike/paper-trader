@@ -56,3 +56,8 @@ assert live.rr_left(nv, 142.55) < 1.0          # halfway to target -> refuse
 lg = {"entry": 100.0, "stop": 99.0, "target": 102.0}
 assert live.rr_left(lg, 100.2) > 1.0 and live.rr_left(lg, 101.5) < 1.0
 print("rr_left ok")
+
+# Early-close times: a 13:00 close moves last entry / flatten / score to 12:44 / 12:55 / 12:57.
+assert [live.shift("13:00", m) for m in (-16, -5, -3)] == ["12:44", "12:55", "12:57"]
+assert min("15:44", live.shift("13:00", -16)) == "12:44" and "12:30" <= "12:44"
+print("early close ok")
