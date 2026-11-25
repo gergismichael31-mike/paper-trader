@@ -49,6 +49,13 @@ jobs:
               live.paper_only()  # raises (and alerts) if this is not an Alpaca PAPER account
               a = live.trading.get_account()
               msg = f"PAPER account {a.account_number} verified, equity ${float(a.equity):,.2f}. Approve buttons are live."
+              from alpaca.trading.requests import GetOrdersRequest
+              from alpaca.trading.enums import QueryOrderStatus
+              for o in live.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=5, nested=True)):
+                  legs = ", ".join(f"{g.type.value} {g.status.value}" for g in (o.legs or []))
+                  msg += f"\n{o.submitted_at:%m-%d %H:%M}Z {o.side.value} {o.qty} {o.symbol}: {o.status.value} @ {o.filled_avg_price} [{legs}]"
+              for p in live.trading.get_all_positions():
+                  msg += f"\nOPEN {p.qty} {p.symbol} avg {p.avg_entry_price}, now {p.current_price}, P&L ${float(p.unrealized_pl):,.2f}"
           else:
               msg = "Cloud bot is set up (alert-only: no Alpaca keys found)."
           print(msg)
